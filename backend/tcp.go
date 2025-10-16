@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -54,7 +55,7 @@ func (m *tcpManager) connect(addr string, onDataReceived func(addr, dataType, da
 		return nil
 	}
 
-	conn, err := net.Dial("tcp", addr)
+	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
 	if err != nil {
 		return fmt.Errorf("%s TCP 연결 실패: %v", addr, err)
 	}
@@ -117,11 +118,9 @@ func (m *tcpManager) startReading(addr string, conn net.Conn, onDataReceived fun
 
 			m.disconnect(addr)
 			// io.EOF는 정상적인 연결 종료
-			if err != io.EOF {
+			if !(errors.Is(err, net.ErrClosed) || err == io.EOF) {
 				fmt.Printf("[%s] 데이터 읽기 오류: %v\n", addr, err)
 				onDataReceived(addr, "error", "연결이 비정상적으로 종료되었습니다: "+err.Error())
-			} else {
-				onDataReceived(addr, "info", fmt.Sprintf("%s Disconnected", addr))
 			}
 			return
 		}

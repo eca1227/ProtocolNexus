@@ -23,14 +23,14 @@
 
     // --- Telnet 모드 변수 ---
     let isTelnetMode = false; // Telnet 모드인지 여부
-    let isHoveringButton = false; // 버튼 전체에 마우스가 올라와 있는지
-    let isHoveringSeam = false;   // '틈'(seam) 부분에 마우스가 올라와 있는지
+    let isHoveringButton = false; // 버튼에 마우스가 올라와 있는지
+    let isHoveringSeam = false;   // 틈(seam) 부분에 마우스가 올라와 있는지
 
     // 0 = 연결 끊김, 1 = 연결됨, 2 = 대기 세 가지 상태를 가짐
     let connectionState = 0;
     async function handleConnect() {
         if (connectionState === 2) return;
-
+        targetIp = targetIp.trim();
         let result = false;
         if (connectionState === 1) {
             if (activeCommOption === 'serial') {

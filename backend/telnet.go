@@ -18,7 +18,7 @@ var (
 	managerTelnet     *telnetManager
 )
 
-// TelnetSession은 하나의 Telnet 연결 상태를 저장합니다.
+// TelnetSession은 하나의 Telnet 연결 상태를 저장
 type TelnetSession struct {
 	Conn   net.Conn
 	Reader *bufio.Reader
@@ -30,7 +30,7 @@ type telnetManager struct {
 	mu       sync.Mutex
 }
 
-// getTelnetManager는 Telnet 매니저 인스턴스를 반환합니다.
+// getTelnetManager는 Telnet 매니저 인스턴스를 반환
 func getTelnetManager() *telnetManager {
 	telnetManagerOnce.Do(func() {
 		managerTelnet = &telnetManager{
@@ -95,20 +95,17 @@ func (m *telnetManager) connect(ip string) (err error) {
 
 	reader := bufio.NewReader(conn)
 
-	if err = skipTelnetNegotiation(conn, reader, 2*time.Second); err != nil {
+	if err = skipTelnetNegotiation(conn, reader, 3*time.Second); err != nil {
 		return fmt.Errorf("[%s] 협상 실패: %v", ip, err)
 	}
 
-	_, err = readUntil(conn, reader, "Password: ", 1*time.Second)
+	_, err = readUntil(conn, reader, "Password: ", 2*time.Second)
 	if err != nil {
 		return fmt.Errorf("[%s] 'Password:' 프롬프트 대기 실패: %v", ip, err)
 	}
 	conn.Write([]byte("Help\r\n"))
 
-	if _, err = readUntil(conn, reader, "GPL:", 1*time.Second); err != nil {
-		// GPL 프롬프트가 없어도 인증은 성공한 것으로 간주하고 경고만 출력할 수 있음
-		// fmt.Printf("[%s] 경고: 'GPL:' 프롬프트를 찾지 못했지만 연결은 계속합니다.\n", ip)
-		// 또는 기존처럼 에러 처리
+	if _, err = readUntil(conn, reader, "GPL:", 2*time.Second); err != nil {
 		return fmt.Errorf("[%s] 'GPL:' 프롬프트 대기 실패: %v", ip, err)
 	}
 
