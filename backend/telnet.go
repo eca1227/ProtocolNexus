@@ -73,51 +73,60 @@ func (m *telnetManager) connect(ip string) (err error) {
 			m.mu.Unlock()
 		}
 	}()
-
-	fmt.Printf("Telnet 연결 시도 for %s...\n", ip)
-	var conn net.Conn
-	conn, err = net.DialTimeout("tcp", ip, 2*time.Second)
-	if err != nil {
-		// Dial 실패 시에는 명확하게 연결 실패 에러만 반환
-		return fmt.Errorf("%s Telnet 연결 실패: %v", ip, err)
-	}
-
-	defer func() {
+	for i := 0; i < 3; i++ {
+		fmt.Printf("Telnet 연결 시도 #%d for %s...\n", i+1, ip)
+		var conn net.Conn
+		conn, err = net.DialTimeout("tcp", ip, 2*time.Second)
 		if err != nil {
-			conn.Close()
+			time.Sleep(200 * time.Millisecond) // 실패 시 잠시 대기
+			continue                           // 다음 시도
 		}
-	}()
 
-	if err = clearInitialBuffer(conn); err != nil {
-		// 각 단계에서 에러 발생 시, 명명된 반환 값 'err'에 할당된 후 defer가 실행됨
-		return fmt.Errorf("[%s] 초기 버퍼 클리어 실패: %v", ip, err)
+		// 연결에 성공하면, 실패 시 conn을 닫도록 defer 설정
+		success := false
+		defer func() {
+			if !success {
+				conn.Close()
+			}
+		}()
+
+		reader := bufio.NewReader(conn)
+
+		if err = skipTelnetNegotiation(conn, reader, 2*time.Second); err != nil {
+			fmt.Printf("협상 실패: %v\n", err)
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		if _, err = readUntil(conn, reader, "Password: ", 2*time.Second); err != nil {
+			fmt.Printf("'Password:' 대기 실패: %v\n", err)
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		conn.Write([]byte("Help\r\n"))
+
+		if _, err = readUntil(conn, reader, "GPL:", 2*time.Second); err != nil {
+			fmt.Printf("'GPL:' 대기 실패: %v\n", err)
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		// 모든 과정 성공!
+		m.mu.Lock()
+		if _, ok := m.sessions[ip]; ok && m.sessions[ip] == nil {
+			session := &TelnetSession{Conn: conn, Reader: reader}
+			m.sessions[ip] = session
+			fmt.Printf("%s 에 성공적으로 연결 및 인증되었습니다.\n", ip)
+			success = true // 성공했으므로 defer에서 conn을 닫지 않도록 플래그 설정
+			m.mu.Unlock()
+			return nil // 에러 없이 함수 종료
+		} else {
+			// 그 사이에 연결 해제 요청이 들어온 경우
+			err = fmt.Errorf("[%s] 연결 과정 중 외부에서 연결 해제 요청이 있었습니다", ip)
+			m.mu.Unlock()
+			return err
+		}
 	}
-
-	reader := bufio.NewReader(conn)
-
-	if err = skipTelnetNegotiation(conn, reader, 3*time.Second); err != nil {
-		return fmt.Errorf("[%s] 협상 실패: %v", ip, err)
-	}
-
-	_, err = readUntil(conn, reader, "Password: ", 2*time.Second)
-	if err != nil {
-		return fmt.Errorf("[%s] 'Password:' 프롬프트 대기 실패: %v", ip, err)
-	}
-	conn.Write([]byte("Help\r\n"))
-
-	if _, err = readUntil(conn, reader, "GPL:", 2*time.Second); err != nil {
-		return fmt.Errorf("[%s] 'GPL:' 프롬프트 대기 실패: %v", ip, err)
-	}
-
-	m.mu.Lock()
-	if _, ok := m.sessions[ip]; ok && m.sessions[ip] == nil {
-		session := &TelnetSession{Conn: conn, Reader: reader}
-		m.sessions[ip] = session
-		fmt.Printf("%s 에 성공적으로 연결 및 인증되었습니다.\n", ip)
-	} else {
-		err = fmt.Errorf("[%s] 연결 과정 중 외부에서 연결 해제 요청이 있었습니다", ip)
-	}
-	m.mu.Unlock()
 
 	return err
 }
@@ -143,7 +152,7 @@ func (m *telnetManager) disconnect(ip string) error {
 	return nil
 }
 
-// sendData는 명령어를 보내고 응답을 기다려 반환합니다.
+// sendData는 명령어를 보내고 응답을 기다려 반환
 func (m *telnetManager) sendData(ip string, command string) (string, error) {
 	m.mu.Lock()
 	session, ok := m.sessions[ip]
@@ -152,6 +161,8 @@ func (m *telnetManager) sendData(ip string, command string) (string, error) {
 		return "", fmt.Errorf("%s 는 연결되어 있지 않습니다", ip)
 	}
 	m.mu.Unlock()
+
+	clearInitialBuffer(session.Conn)
 
 	if _, err := session.Conn.Write([]byte(command + "\r\n")); err != nil {
 		m.disconnect(ip)
@@ -165,6 +176,14 @@ func (m *telnetManager) sendData(ip string, command string) (string, error) {
 		m.disconnect(ip)
 		return "", fmt.Errorf("[%s] 응답 읽기 실패: %v", ip, err)
 	}
+
+	idx := strings.Index(response, "\n")
+	if idx != -1 {
+		response = response[idx+1:]
+	} else {
+		response = ""
+	}
+
 	fmt.Printf("[%s] Telnet 응답 수신\n", ip)
 	return strings.TrimSpace(response), nil
 }
@@ -238,20 +257,15 @@ func (m *telnetManager) readAllResponse(session *TelnetSession, timeout time.Dur
 func readUntil(conn net.Conn, reader *bufio.Reader, delim string, timeout time.Duration) (string, error) {
 	var buf strings.Builder
 	delimLen := len(delim)
-	deadline := time.Now().Add(timeout)
+	conn.SetReadDeadline(time.Now().Add(timeout))
+	defer conn.SetReadDeadline(time.Time{})
 
-	for time.Now().Before(deadline) {
-		conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-
+	for {
 		b, err := reader.ReadByte()
 		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				continue
-			}
 			return "", err
 		}
-
-		if b == 0xFF {
+		if b == 0xFF { // IAC
 			if reader.Buffered() < 2 {
 				continue
 			}
@@ -264,30 +278,30 @@ func readUntil(conn net.Conn, reader *bufio.Reader, delim string, timeout time.D
 			return buf.String(), nil
 		}
 	}
-	return "", fmt.Errorf("readUntil 시간 초과 (%v)", timeout)
 }
 
 func skipTelnetNegotiation(conn net.Conn, reader *bufio.Reader, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-		b, err := reader.ReadByte()
+	conn.SetReadDeadline(time.Now().Add(timeout))
+	defer conn.SetReadDeadline(time.Time{})
+
+	for {
+		b, err := reader.Peek(1)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				continue // 타임아웃 다시 시도
+				// 데이터를 하나도 못받고 타임아웃 -> 협상할 내용이 없는 것으로 간주하고 성공 처리
+				return nil
 			}
-			if err == io.EOF {
-				return nil // EOF면 정상 종료
-			}
-			continue // 그 외 에러는 무시하고 루프 유지
+			return err
 		}
-		if b == 0xFF {
-			if reader.Buffered() >= 2 {
-				reader.Discard(2)
+
+		if b[0] == 0xFF {
+			if reader.Buffered() < 3 {
+				time.Sleep(10 * time.Millisecond)
+				continue
 			}
-			continue
+			reader.Discard(3)
+		} else {
+			return nil // 협상 코드가 아니면 즉시 종료
 		}
-		return nil
 	}
-	return fmt.Errorf("skipTelnetNegotiation 시간 초과 (%v)", timeout)
 }
