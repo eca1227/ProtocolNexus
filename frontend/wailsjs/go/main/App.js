@@ -6,12 +6,20 @@ export function CommanderConn(arg1, arg2, arg3) {
   return window['go']['main']['App']['CommanderConn'](arg1, arg2, arg3);
 }
 
-export function DisConn(arg1) {
-  return window['go']['main']['App']['DisConn'](arg1);
+export function CommanderDisconn(arg1) {
+  return window['go']['main']['App']['CommanderDisconn'](arg1);
+}
+
+export function CommanderIsLogging(arg1) {
+  return window['go']['main']['App']['CommanderIsLogging'](arg1);
 }
 
 export function Greet(arg1) {
   return window['go']['main']['App']['Greet'](arg1);
+}
+
+export function LogFolderOpen(arg1) {
+  return window['go']['main']['App']['LogFolderOpen'](arg1);
 }
 
 export function LogPrint(arg1, arg2, arg3) {

@@ -120,14 +120,14 @@ func (m *tcpManager) startReading(addr string, conn net.Conn, onDataReceived fun
 			// io.EOF는 정상적인 연결 종료
 			if !(errors.Is(err, net.ErrClosed) || err == io.EOF) {
 				fmt.Printf("[%s] 데이터 읽기 오류: %v\n", addr, err)
-				onDataReceived(addr, "error", "연결이 비정상적으로 종료되었습니다: "+err.Error())
+				onDataReceived(addr, "ERRO", "연결이 비정상적으로 종료되었습니다: "+err.Error())
 			}
 			return
 		}
 		if bytesRead > 0 {
 			receivedData := string(buff[:bytesRead])
 			// 콜백 함수에 주소(addr)도 함께 전달하여 어느 서버에서 온 데이터인지 구분
-			onDataReceived(addr, "received", receivedData)
+			onDataReceived(addr, "RECV", receivedData)
 		}
 	}
 }

@@ -2,7 +2,7 @@
     import { onMount } from 'svelte';
     import { EventsOn } from '../../wailsjs/runtime';
     import Notifier from '../module/Notifier.svelte';
-    import {SendData, CommanderConn, SerialList} from "../../wailsjs/go/main/App.js";
+    import {SendData, CommanderConn, SerialList, LogFolderOpen, CommanderIsLogging} from "../../wailsjs/go/main/App.js";
     let activeCommOption = 'tcp';
     let serialPort = 'COM1';
     let baudRate = '57600';
@@ -18,13 +18,15 @@
         { id: 3, value: '' },
         { id: 4, value: '' },
     ];
-    let SendDataHistory = '';
     let memo = '';
 
     // --- Telnet 모드 변수 ---
     let isTelnetMode = false; // Telnet 모드인지 여부
     let isHoveringButton = false; // 버튼에 마우스가 올라와 있는지
     let isHoveringSeam = false;   // 틈(seam) 부분에 마우스가 올라와 있는지
+
+    // --- 로그 켜기/끄기 토글 상태 변수 ---
+    let isLoggingEnabled = false;
 
     // 0 = 연결 끊김, 1 = 연결됨, 2 = 대기 세 가지 상태를 가짐
     let connectionState = 0;
@@ -38,7 +40,7 @@
             } else {
                 result = await CommanderConn((isTelnetMode) ? -3:-2, targetIp, tcpPort);
             }
-            if (result) {notifier?.add("연결 해제 실패", "error", 3000);}
+            if (result) {notifier?.add("연결 해제 실패", "ERRO", 3000);}
         } else {
             connectionState = 2;
             // 실제 Go 함수를 호출하고 응답을 기다림 (Promise)
@@ -47,7 +49,7 @@
             } else {
                 result = await CommanderConn((isTelnetMode) ? 3:2, targetIp, tcpPort);
             }
-            if (!result) {notifier?.add("연결 실패", "error", 3000);}
+            if (!result) {notifier?.add("연결 실패", "ERRO", 3000);}
         }
         if (result) {
             connectionState = 1;
@@ -123,6 +125,16 @@
             handleConnect();
         }
     }
+
+    async function handleToggleLogging() {
+        try {
+            await CommanderIsLogging(!isLoggingEnabled);
+            isLoggingEnabled = !isLoggingEnabled;
+        } catch (err) {
+            console.error("로그 상태 변경 실패:", err);
+            notifier?.add("로그 기록 실패", "ERRO", 3000);
+        }
+    }
 </script>
 
 <Notifier bind:this={notifier} />
@@ -195,7 +207,6 @@
                                 class:connecting={connectionState === 2}
                                 class:connected={connectionState === 1}
                                 disabled={connectionState === 2}
-                                style="width: 100%;"
                                 on:click={() => handleConnect()}>
                             {#if connectionState === 2}
                                 Connecting
@@ -223,7 +234,6 @@
                                 class:connecting={connectionState === 2}
                                 class:connected={connectionState === 1}
                                 disabled={connectionState === 2}
-                                style="width: 100%;"
                                 on:click={handleConnect}>
                             {#if connectionState === 2}
                                 Connecting
@@ -278,9 +288,22 @@
             {/each}
         </div>
 
-        <div class="bott-box">
-            <label for="data-send-history">Sent Data History</label>
-            <textarea id="data-send-history" readonly bind:value={SendDataHistory}></textarea>
+        <div class="bott-box" style="gap: 0.4rem;">
+            <div class="section-title" style="font-size: 0.875rem; color: var(--text-muted-color);">Functions</div>
+            <button
+                    class="btn"
+                    class:active={isLoggingEnabled}
+                    on:click={handleToggleLogging}
+            >
+                {#if isLoggingEnabled}
+                    Now Logging Start
+                {:else}
+                    Now Logging Stop
+                {/if}
+            </button>
+            <button class="btn" on:click={() => LogFolderOpen('Commander')}>
+                Log Folder
+            </button>
         </div>
         <div class="bott-box">
             <label for="memo">Memo</label>
@@ -302,7 +325,7 @@
     .comm-option-panel {
         display: flex;
         gap: 0.2rem;
-        width: 100px;
+        width: 98px;
         border-radius: 0.5rem;
         padding: 0.5rem;
     }
@@ -362,6 +385,20 @@
     .bott-box textarea {
         flex-grow: 1; /* 남은 공간을 모두 차지 */
         resize: none;
+    }
+    .bott-box .btn {
+        width: 100%;
+        padding: 0.5rem;
+        box-sizing: border-box;
+    }
+    /* 로그 켜기/끄기 토글 버튼 활성 스타일 */
+    .bott-box .btn.active {
+        background-color: var(--accent-color);
+        color: white;
+        border-color: var(--accent-color);
+    }
+    .bott-box .btn.active:hover {
+        background-color: var(--accent-hover-color);
     }
 
     .btn.connected {
@@ -466,5 +503,9 @@
     @keyframes connecting-stripes {
         from { background-position: 40px 0; }
         to { background-position: 0 0; }
+    }
+    .btn.btn-primary {
+        width: 97px;
+        height: 35px;
     }
 </style>

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"ProtocolNexus/backend"
 	"context"
 	"fmt"
 )
@@ -19,6 +20,7 @@ func NewApp() *App {
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	backend.DataSetProcess()
 }
 
 // Greet returns a greeting for the given name

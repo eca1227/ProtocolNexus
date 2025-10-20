@@ -15,9 +15,9 @@ func EthernetConnection(name string) (bool, error) {
 	for _, iface := range interfaces {
 		if iface.Name == name {
 			if iface.Flags&net.FlagUp != 0 {
-				return true, nil // 인터페이스를 찾았고, 활성화 상태임
+				return true, nil // 인터페이스를 찾았고, 활성화 상태
 			} else {
-				return false, nil // 인터페이스를 찾았지만, 비활성화 상태임
+				return false, nil // 인터페이스를 찾았지만, 비활성화 상태
 			}
 		}
 	}

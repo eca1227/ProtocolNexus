@@ -17,7 +17,7 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:  "ProtocolNexus",
+		Title:  "ProtocolNexus Beta 1",
 		Width:  1280,
 		Height: 750,
 		AssetServer: &assetserver.Options{

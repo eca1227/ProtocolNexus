@@ -7,7 +7,7 @@
     const notifications = writable([]);
 
     // 2. 알림을 추가하는 함수를 `export`하여 외부에서 호출할 수 있도록 합니다.
-    export function add(message, type = 'info', duration = 3000) {
+    export function add(message, type = 'INFO', duration = 3000) {
         const id = Date.now() + Math.random();
         const notification = { id, message, type, duration };
 

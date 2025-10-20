@@ -3,9 +3,13 @@
 
 export function CommanderConn(arg1:number,arg2:string,arg3:string):Promise<boolean>;
 
-export function DisConn(arg1:Array<string>):Promise<void>;
+export function CommanderDisconn(arg1:Array<string>):Promise<void>;
+
+export function CommanderIsLogging(arg1:boolean):Promise<void>;
 
 export function Greet(arg1:string):Promise<string>;
+
+export function LogFolderOpen(arg1:string):Promise<void>;
 
 export function LogPrint(arg1:string,arg2:string,arg3:string):Promise<void>;
 

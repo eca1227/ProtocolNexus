@@ -3,7 +3,7 @@
     import {onMount, onDestroy, tick} from 'svelte';
     import {EventsOn} from "../../wailsjs/runtime/runtime.js";
 
-    // type == {'info', 'received', 'sent', 'error'}
+    // type == {'INFO', 'RECV', 'SENT', 'ERRO'}
     let logLines = [];
     $: processedLogLines = logLines.flatMap(log => {
         const lines = log.text.split('\n');
@@ -78,11 +78,11 @@
                             {#if !dummy}
                                 <span class="log-prefix">
                                     {#if item.isFirstLine}
-                                        {#if item.type === 'sent'}
+                                        {#if item.type === 'SENT'}
                                             &gt;&gt;
-                                        {:else if item.type === 'received'}
+                                        {:else if item.type === 'RECV'}
                                             &lt;&lt;
-                                        {:else if item.type === 'error'}
+                                        {:else if item.type === 'ERRO'}
                                             !!
                                         {/if}
                                     {/if}
@@ -147,16 +147,16 @@
     }
 
     /* === 타입별 색상 지정 === */
-    .log-line[class*="info"] {
+    .log-line[class*="INFO"] {
         color: var(--text-muted-color);
     }
-    .log-line[class*="sent"] {
+    .log-line[class*="SENT"] {
         color: #60a5fa;
     }
-    .log-line[class*="received"] {
+    .log-line[class*="RECV"] {
         color: #4ade80;
     }
-    .log-line[class*="error"] {
+    .log-line[class*="ERRO"] {
         color: var(--danger-color);
         font-weight: bold;
     }
