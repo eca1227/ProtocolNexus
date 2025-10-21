@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"go.bug.st/serial"
@@ -29,14 +30,18 @@ var (
 )
 
 type serialManager struct {
-	connections map[string]serial.Port
-	mu          sync.RWMutex
+	connections   map[string]serial.Port
+	buffers       map[string]*bytes.Buffer
+	disconnecting map[string]bool
+	mu            sync.RWMutex
 }
 
 func getSerialManager() *serialManager {
 	managerOnce.Do(func() {
 		managerSerial = &serialManager{
-			connections: make(map[string]serial.Port),
+			connections:   make(map[string]serial.Port),
+			buffers:       make(map[string]*bytes.Buffer),
+			disconnecting: make(map[string]bool),
 		}
 		fmt.Println("SerialManager가 생성되었습니다.")
 	})
@@ -72,6 +77,8 @@ func (m *serialManager) connect(portName string, baudRate int, onDataReceived fu
 	}
 
 	m.connections[portName] = port
+	m.buffers[portName] = new(bytes.Buffer)
+	m.disconnecting[portName] = false
 	fmt.Printf("%s 포트에 성공적으로 연결되었습니다.\n", portName)
 
 	go m.startReading(portName, onDataReceived, port)
@@ -82,8 +89,26 @@ func (m *serialManager) connect(portName string, baudRate int, onDataReceived fu
 func (m *serialManager) startReading(portName string, onDataReceived func(port, dataType, data string), port serial.Port) {
 	buff := make([]byte, 512)
 	for {
+		m.mu.RLock()
+		_, isConnected := m.connections[portName]
+		m.mu.RUnlock()
+		if !isConnected {
+			break
+		}
+
 		port.SetReadTimeout(1 * time.Second)
 		bytesRead, err := port.Read(buff)
+
+		if bytesRead > 0 {
+			m.mu.Lock()
+			buffer, ok := m.buffers[portName]
+			if ok && buffer != nil {
+				buffer.Write(buff[:bytesRead])
+			}
+			m.mu.Unlock()
+			// 버퍼 처리 함수 호출
+			m.processBuffer(portName, onDataReceived)
+		}
 		if err != nil {
 			if isTimeout(err) {
 				continue
@@ -103,16 +128,13 @@ func (m *serialManager) startReading(portName string, onDataReceived func(port, 
 					}
 				}
 			}
-			if isHandleError {
-			} else if err != io.EOF {
+			m.mu.Lock()
+			isDisconnecting, _ := m.disconnecting[portName]
+			m.mu.Unlock()
+			if !isDisconnecting && !isHandleError && err != io.EOF {
 				onDataReceived(portName, "ERRO", err.Error())
 			}
 			break
-		}
-
-		tData := strings.TrimSpace(string(buff[:bytesRead]))
-		if len(tData) > 0 {
-			onDataReceived(portName, "RECV", tData)
 		}
 	}
 
@@ -121,6 +143,7 @@ func (m *serialManager) startReading(portName string, onDataReceived func(port, 
 
 func (m *serialManager) disconnect(portName string) error {
 	m.mu.Lock()
+	m.disconnecting[portName] = true
 	port, ok := m.connections[portName]
 	m.mu.Unlock()
 	if !ok {
@@ -133,9 +156,10 @@ func (m *serialManager) disconnect(portName string) error {
 	}
 
 	m.mu.Lock()
+	delete(m.buffers, portName)
 	delete(m.connections, portName)
 	m.mu.Unlock()
-	if err != nil && !errors.Is(err, io.EOF) {
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) {
 		return fmt.Errorf("%s 포트 닫기 실패: %v", portName, err)
 	}
 
@@ -153,9 +177,9 @@ func (m *serialManager) sendData(portName, data string) error {
 
 	_, err := port.Write([]byte(data + "\r\n"))
 	if err != nil {
-		if errors.Is(err, io.EOF) {
+		if errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) {
 			// 포트가 이미 닫힌 상태
-			_ = m.disconnect(portName)
+			go m.disconnect(portName)
 		}
 		return fmt.Errorf("%s 데이터 전송 실패: %v", portName, err)
 	}
@@ -178,4 +202,45 @@ func isTimeout(err error) bool {
 		return true
 	}
 	return false
+}
+
+func (m *serialManager) processBuffer(portName string, onDataReceived func(port, dataType, data string)) {
+	m.mu.Lock()
+	buffer, ok := m.buffers[portName]
+	m.mu.Unlock()
+
+	if !ok || buffer == nil {
+		return
+	}
+
+	delimiter := []byte("\r\n")
+
+	for {
+		m.mu.Lock()
+		bufferBytes := buffer.Bytes()
+		index := bytes.Index(bufferBytes, delimiter)
+		if index == -1 {
+			m.mu.Unlock()
+			break
+		}
+
+		messageBytes := make([]byte, index+len(delimiter))
+		_, err := buffer.Read(messageBytes) // 버퍼에서 읽기 (읽은 부분은 버퍼에서 제거)
+		isDisconnecting, _ := m.disconnecting[portName]
+		m.mu.Unlock()
+
+		if isDisconnecting {
+			break
+		} else {
+			if err != nil && err != io.EOF {
+				onDataReceived(portName, "ERRO", fmt.Sprintf("버퍼 읽기 오류: %v", err))
+				continue
+			}
+		}
+
+		message := strings.TrimSpace(string(messageBytes[:index]))
+		if len(message) > 0 {
+			onDataReceived(portName, "RECV", message)
+		}
+	}
 }
