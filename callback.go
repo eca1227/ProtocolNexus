@@ -146,8 +146,11 @@ func (a *App) CommanderConn(connType int, address, address2 string) bool {
 		if ok != nil {
 			return false
 		}
-		dataHandler := func(port string, data string) {
-			a.LogPrint("CommanderLog", "RECV", data)
+		dataHandler := func(port, dataType, data string) {
+			a.LogPrint("CommanderLog", dataType, data)
+			if dataType != "RECV" {
+				a.CommanderDisconn()
+			}
 		}
 		err = backend.SerialConnect(address, aNum, dataHandler)
 		if err != nil {

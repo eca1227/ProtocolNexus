@@ -111,21 +111,18 @@ func (m *telnetManager) connect(ip string) (err error) {
 			continue
 		}
 
-		// 모든 과정 성공!
 		m.mu.Lock()
 		if _, ok := m.sessions[ip]; ok && m.sessions[ip] == nil {
 			session := &TelnetSession{Conn: conn, Reader: reader}
 			m.sessions[ip] = session
 			fmt.Printf("%s 에 성공적으로 연결 및 인증되었습니다.\n", ip)
 			success = true // 성공했으므로 defer에서 conn을 닫지 않도록 플래그 설정
-			m.mu.Unlock()
-			return nil // 에러 없이 함수 종료
 		} else {
 			// 그 사이에 연결 해제 요청이 들어온 경우
-			err = fmt.Errorf("[%s] 연결 과정 중 외부에서 연결 해제 요청이 있었습니다", ip)
-			m.mu.Unlock()
-			return err
+			err = fmt.Errorf("[%s] 연결 해제 요청", ip)
 		}
+		m.mu.Unlock()
+		break
 	}
 
 	return err
@@ -133,9 +130,8 @@ func (m *telnetManager) connect(ip string) (err error) {
 
 func (m *telnetManager) disconnect(ip string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	session, ok := m.sessions[ip]
+	m.mu.Unlock()
 	if !ok {
 		return nil // 이미 연결 끊김
 	}
@@ -147,7 +143,9 @@ func (m *telnetManager) disconnect(ip string) error {
 		session.Conn.Close()
 	}
 
+	m.mu.Lock()
 	delete(m.sessions, ip)
+	m.mu.Unlock()
 	fmt.Printf("%s Telnet 연결이 해제되었습니다.\n", ip)
 	return nil
 }
@@ -156,11 +154,10 @@ func (m *telnetManager) disconnect(ip string) error {
 func (m *telnetManager) sendData(ip string, command string) (string, error) {
 	m.mu.Lock()
 	session, ok := m.sessions[ip]
+	m.mu.Unlock()
 	if !ok {
-		m.mu.Unlock()
 		return "", fmt.Errorf("%s 는 연결되어 있지 않습니다", ip)
 	}
-	m.mu.Unlock()
 
 	clearInitialBuffer(session.Conn)
 
@@ -194,16 +191,14 @@ func clearInitialBuffer(conn net.Conn) error {
 	readBuf := make([]byte, 1024) // 데이터를 읽어 담아둘 임시 버퍼
 
 	for time.Now().Before(overallDeadline) {
-		// 1. 매우 짧은 읽기 타임아웃 설정 (50ms)
 		err := conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 		if err != nil {
 			return err
 		}
 
-		// 2. 데이터 읽기 시도
 		_, err = conn.Read(readBuf)
 		if err != nil {
-			// 3. 타임아웃 에러가 발생하면, 이는 "더 이상 읽을 데이터가 없음"을 의미하므로 정상 종료
+			// 타임아웃 에러가 발생시, 더 이상 읽을 데이터가 없음
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				// 최종적으로 ReadDeadline을 초기화하여 이후 작업에 영향이 없도록 함
 				conn.SetReadDeadline(time.Time{})
@@ -220,9 +215,8 @@ func clearInitialBuffer(conn net.Conn) error {
 	return nil
 }
 
-/* 헬퍼 함수들의 전체 구현 내용 */
 func (m *telnetManager) readAllResponse(session *TelnetSession, timeout time.Duration) (string, error) {
-	var buf [4096]byte // 버퍼 크기를 넉넉하게
+	var buf [4096]byte
 	var response strings.Builder
 	deadline := time.Now().Add(timeout)
 	search := []byte("GPL:")

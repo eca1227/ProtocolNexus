@@ -1,10 +1,16 @@
 package backend
 
 import (
+	"errors"
 	"fmt"
 	"go.bug.st/serial"
 	"io"
+	"os"
+	"runtime"
+	"strings"
 	"sync"
+	"syscall"
+	"time"
 )
 
 func FindSerialPort() []string {
@@ -18,22 +24,19 @@ func FindSerialPort() []string {
 }
 
 var (
-	managerOnce   sync.Once      // manager를 단 한 번만 생성하기 위한 장치
-	managerSerial *serialManager // 애플리케이션 전역에서 사용될 단일 인스턴스
+	managerOnce   sync.Once
+	managerSerial *serialManager
 )
 
-// SerialManager 구조체는 외부로 노출할 필요가 없으므로 소문자로 시작 (private)
 type serialManager struct {
-	connections map[string]io.ReadWriteCloser
-	mu          sync.Mutex
+	connections map[string]serial.Port
+	mu          sync.RWMutex
 }
 
-// getSerialManager 함수는 managerTelnet 인스턴스를 반환합니다.
-// 최초 호출 시에만 인스턴스를 생성합니다.
 func getSerialManager() *serialManager {
 	managerOnce.Do(func() {
 		managerSerial = &serialManager{
-			connections: make(map[string]io.ReadWriteCloser),
+			connections: make(map[string]serial.Port),
 		}
 		fmt.Println("SerialManager가 생성되었습니다.")
 	})
@@ -41,7 +44,7 @@ func getSerialManager() *serialManager {
 }
 
 // --- 공개 함수 ---
-func SerialConnect(portName string, baudRate int, onDataReceived func(port string, data string)) error {
+func SerialConnect(portName string, baudRate int, onDataReceived func(port, dataType, data string)) error {
 	return getSerialManager().connect(portName, baudRate, onDataReceived)
 }
 
@@ -54,7 +57,7 @@ func SerialSendData(portName, data string) error {
 }
 
 // --- 비공개 함수 ---
-func (m *serialManager) connect(portName string, baudRate int, onDataReceived func(port string, data string)) error {
+func (m *serialManager) connect(portName string, baudRate int, onDataReceived func(port, dataType, data string)) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -71,38 +74,68 @@ func (m *serialManager) connect(portName string, baudRate int, onDataReceived fu
 	m.connections[portName] = port
 	fmt.Printf("%s 포트에 성공적으로 연결되었습니다.\n", portName)
 
-	go func() {
-		// 이제 이 고루틴은 connect 메소드에 의해 시작됩니다.
-		buff := make([]byte, 128)
-		for {
-			bytesRead, err := port.Read(buff)
-			if err != nil {
-				fmt.Printf("[%s] 데이터 읽기 중단: %v\n", portName, err)
-				m.disconnect(portName) // 내부적으로 disconnect 호출
-				return
-			}
-			if bytesRead > 0 {
-				receivedData := string(buff[:bytesRead])
-				onDataReceived(portName, receivedData)
-			}
-		}
-	}()
+	go m.startReading(portName, onDataReceived, port)
 
 	return nil
 }
 
+func (m *serialManager) startReading(portName string, onDataReceived func(port, dataType, data string), port serial.Port) {
+	buff := make([]byte, 512)
+	for {
+		port.SetReadTimeout(1 * time.Second)
+		bytesRead, err := port.Read(buff)
+		if err != nil {
+			if isTimeout(err) {
+				continue
+			}
+
+			var errno syscall.Errno
+			isHandleError := false
+			if errors.As(err, &errno) {
+				switch runtime.GOOS {
+				case "windows":
+					if errno == 6 { // ERROR_INVALID_HANDLE
+						isHandleError = true
+					}
+				case "linux", "darwin":
+					if errno == syscall.EBADF { // EBADF (코드 9)
+						isHandleError = true
+					}
+				}
+			}
+			if isHandleError {
+			} else if err != io.EOF {
+				onDataReceived(portName, "ERRO", err.Error())
+			}
+			break
+		}
+
+		tData := strings.TrimSpace(string(buff[:bytesRead]))
+		if len(tData) > 0 {
+			onDataReceived(portName, "RECV", tData)
+		}
+	}
+
+	_ = m.disconnect(portName)
+}
+
 func (m *serialManager) disconnect(portName string) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	port, ok := m.connections[portName]
+	m.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("%s 포트는 연결되어 있지 않습니다", portName)
 	}
 
 	err := port.Close()
-	delete(m.connections, portName) // 맵에서 연결 정보 삭제
-	if err != nil {
+	if runtime.GOOS == "windows" {
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	m.mu.Lock()
+	delete(m.connections, portName)
+	m.mu.Unlock()
+	if err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("%s 포트 닫기 실패: %v", portName, err)
 	}
 
@@ -111,18 +144,38 @@ func (m *serialManager) disconnect(portName string) error {
 }
 
 func (m *serialManager) sendData(portName, data string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	m.mu.RLock()
 	port, ok := m.connections[portName]
+	m.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("%s 포트는 연결되어 있지 않습니다", portName)
 	}
 
 	_, err := port.Write([]byte(data + "\r\n"))
 	if err != nil {
-		return fmt.Errorf("%s 포트로 데이터 전송 실패: %v", portName, err)
+		if errors.Is(err, io.EOF) {
+			// 포트가 이미 닫힌 상태
+			_ = m.disconnect(portName)
+		}
+		return fmt.Errorf("%s 데이터 전송 실패: %v", portName, err)
 	}
 	fmt.Printf("[%s] 데이터 전송: '%s'\n", portName, data)
 	return nil
+}
+
+func isTimeout(err error) bool {
+	// OS 수준의 타임아웃 오류
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+
+	// net.Error 인터페이스를 구현하는 타임아웃 오류
+	type timeout interface {
+		Timeout() bool
+	}
+	var e timeout
+	if errors.As(err, &e) && e.Timeout() {
+		return true
+	}
+	return false
 }
